@@ -1,3 +1,6 @@
 [submodule "third_party/yasio"]
 	path = third_party/yasio
 	url = https://github.com/yasio/yasio.git
+[submodule "third_party/boringssl"]
+	path = third_party/boringssl
+	url = https://github.com/google/boringssl.git

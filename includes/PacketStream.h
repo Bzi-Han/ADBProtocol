@@ -4,7 +4,24 @@
 // PACKET_STREAM_NETWORK_ENDIAN: Serialize with network endian
 
 #include <vector>
+#include <string>
 #include <stdexcept>
+
+#define BYTE_SWAP_16(i) (((i >> 8) & 0x00ff) | ((i << 8) & 0xff00))
+#define BYTE_SWAP_32(i)          \
+    (((i >> 24) & 0x000000FFL) | \
+     ((i >> 8) & 0x0000FF00L) |  \
+     ((i << 8) & 0x00FF0000L) |  \
+     ((i << 24) & 0xFF000000L))
+#define BYTE_SWAP_64(i)                   \
+    (((i >> 56) & 0x00000000000000FFLL) | \
+     ((i >> 40) & 0x000000000000FF00LL) | \
+     ((i >> 24) & 0x0000000000FF0000LL) | \
+     ((i >> 8) & 0x00000000FF000000LL) |  \
+     ((i << 8) & 0x000000FF00000000LL) |  \
+     ((i << 24) & 0x0000FF0000000000LL) | \
+     ((i << 40) & 0x00FF000000000000LL) | \
+     ((i << 56) & 0xFF00000000000000LL))
 
 class PacketStream;
 
@@ -28,9 +45,15 @@ struct PacketStreamTrait;
 class PacketStream
 {
 public:
+    void Resize(size_t size);
+
     void Reserve(size_t size);
 
     void Clear();
+
+    char *Data();
+
+    size_t Size() const;
 
     std::vector<char> &Buffer();
 
@@ -69,6 +92,7 @@ private:
     friend struct PacketStreamTrait;
 
     ptrdiff_t m_index = 0;
+    size_t m_size = 0;
     std::vector<char> m_buffer;
 };
 
@@ -84,7 +108,7 @@ struct PacketSerializable
 template <typename any_t>
 any_t PacketStreamTraitTools::ReadTrivial(PacketStream *self)
 {
-    if (self->m_index + sizeof(any_t) > self->m_buffer.size())
+    if (self->m_index + sizeof(any_t) > self->m_size)
         throw std::runtime_error("Read out of range");
 
     auto result = *reinterpret_cast<any_t *>(self->m_buffer.data() + self->m_index);
@@ -99,18 +123,22 @@ size_t PacketStreamTraitTools::WriteTrivial(PacketStream *self, const any_t &dat
     auto begin = reinterpret_cast<char *>(const_cast<any_t *>(&data));
     auto end = begin + sizeof(any_t);
 
-    if (self->m_buffer.size() <= static_cast<size_t>(self->m_index))
+    if (self->m_buffer.size() < static_cast<size_t>(self->m_index) + sizeof(any_t))
         self->m_buffer.insert(self->m_buffer.begin() + self->m_index, begin, end);
     else
         memcpy(self->m_buffer.data() + self->m_index, begin, sizeof(any_t));
     self->m_index += sizeof(any_t);
+    self->m_size += sizeof(any_t);
 
-    return self->m_buffer.size();
+    return self->m_size;
 }
 
 char *PacketStreamTraitTools::ReadBytesRef(PacketStream *self, size_t size)
 {
-    if (self->m_index + size > self->m_buffer.size())
+    if (0 == size)
+        return nullptr;
+
+    if (self->m_index + size > self->m_size)
         throw std::runtime_error("Read out of range");
 
     auto result = self->m_buffer.data() + self->m_index;
@@ -120,7 +148,10 @@ char *PacketStreamTraitTools::ReadBytesRef(PacketStream *self, size_t size)
 }
 void PacketStreamTraitTools::ReadBytes(PacketStream *self, char *buffer, size_t size)
 {
-    if (self->m_index + size > self->m_buffer.size())
+    if (nullptr == buffer || 0 == size)
+        return;
+
+    if (self->m_index + size > self->m_size)
         throw std::runtime_error("Read out of range");
 
     memcpy(buffer, self->m_buffer.data() + self->m_index, size);
@@ -129,11 +160,15 @@ void PacketStreamTraitTools::ReadBytes(PacketStream *self, char *buffer, size_t 
 
 size_t PacketStreamTraitTools::WriteBytes(PacketStream *self, char *buffer, size_t size)
 {
-    if (self->m_buffer.size() <= static_cast<size_t>(self->m_index))
+    if (nullptr == buffer || 0 == size)
+        return self->m_index;
+
+    if (self->m_buffer.size() < static_cast<size_t>(self->m_index) + size)
         self->m_buffer.insert(self->m_buffer.begin() + self->m_index, buffer, buffer + size);
     else
         memcpy(self->m_buffer.data() + self->m_index, buffer, size);
     self->m_index += size;
+    self->m_size += size;
 
     return self->m_index;
 }
@@ -170,7 +205,7 @@ struct PacketStreamTrait : PacketStreamTraitTools
         {
             data.Serialize(self);
 
-            return self->m_buffer.size();
+            return self->m_size;
         }
     }
 };
